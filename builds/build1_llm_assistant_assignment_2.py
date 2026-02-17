@@ -2,19 +2,53 @@
 Build1: This build creates a simple LLM assistant using LangChain's LCEL framework
 and imports build0 functions to load data and perform basic data set profiling.
 
+TASK:
 Your job is to fill in the blanks to create a working interactive command-line assistant
 that can answer questions about the dataset schema. Then, you will run the script 3 times in different modes
 (no memory, memory, streaming). At each step, you should test the assistant by asking questions about the
 dataset and observing how it responds. Make sure to try follow-up questions in memory mode to make sure
 it retains context across interactions.
 
-How to run it:
+In order to complete the assignment, you will need to:
+1) Download the build1_llm_assistant_assignment_2.py and the requirements.txt,
+run the requirements.txt file to install the necessary libraries into your local
+project virtual environment.
+
+2) Make sure you have split your Build0 code into reusable functions into a folder in the project root directory
+(e.g., src/) and that you have run the test_modles.py file to confirm they work.
+
+3) Complete the assignment by filling in the blanks (marked with TODO) in the
+build1_llm_assistant_assignment_2.py file. The main areas you need to complete are:
+
+3a) Write your own SYSTEM_PROMPT that defines the assistant's role, what it can see (only the dataset schema), and how it should format its responses.
+3b) Complete the profile_to_schema_text function to convert the output of basic_profile() into a string format that can be included in the prompt.
+3c) Fill in the blanks in the build_chain function to create either a memory-enabled or non-memory chain based on the arguments.
+3d) Complete the argparse section in the main() function to correctly parse command-line arguments for data path, report directory, model choice,
+temperature, and flags for quiet schema, memory, and streaming.
+
+4) After completing the code, run the script 3 times with different combinations of
+the --memory and --stream flags to see how the assistant behaves in each mode.
+Test it by asking questions about the dataset schema and observing the responses.
+Note any issues you encounter in each mode (e.g., hallucinations, incorrect answers,
+failure to follow instructions), how it handles follow-up questions in memory mode
+and how the output is displayed in streaming mode. Describe any edits you made to the system prompt
+or other parts of the code to improve the assistant's performance based on your observations.
+
+5) Take screenshots of the assistant in action for each mode and paste them into a document.
+Include the link to your GitHub repo at the top of the document and upload it to Moodle.
+
+6) Commit and Push your changes to your GitHub repository.
+
+Before submitting, make sure that your code executes correctly and that the streaming and
+memory modes work as expected.
+
+HOW TO RUN THE SCRIPT:
 1) Make sure you have your environment activated and set up with the necessary libraries. There are new
 libraries so run the requirements.txt file to install them.
 
 2) Run the script with the --data argument pointing to your CSV file.
 
-Run it 3 times to see the differences between no memory, memory, and streaming modes:
+3) Run it 3 times to see the differences between no memory, memory, and streaming modes:
 
 Run 1 (no memory):
 python builds/build1_llm_assistant_assignment_2.py --data data/penguins.csv
