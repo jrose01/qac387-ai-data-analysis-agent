@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from dotenv import load_dotenv
 
-from rag_faiss_utils_pdf import (
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
+
+from src.rag_faiss_utils_pdf import (
     build_faiss_index,
     build_rag_chunks,
     save_faiss_index,
