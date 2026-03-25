@@ -1,57 +1,23 @@
 """
-Build 0: Data Analysis Pipeline ( ASSIGNMENT 1)
+Build 0: Data Analysis Pipeline (SOLUTION KEY for grading)
 
-You will complete a baseline data analysis pipeline. This file is meant to be run
-from the terminal, and later reused as a module (tool) in agentic builds.
+This file provides:
+- Completed code for BLANK 1 ... BLANK 10
+- Full implementations of:
+    * missingness_table(df)
+    * multiple_linear_regression(df, outcome, predictors=None)
+    * Note: The regression function uses statsmodels OLS instead of numpy lstsq for
+    * better handling of categorical predictors and missing data.
 
-WHAT YOU MUST DO
-1) Fill in the 10 code blanks marked BLANK 1 ... BLANK 10.
-- Each blank is a single line (or small block) that has been removed.
-- Replace the placeholder with correct Python code.
-
-2) Write TWO new functions (these are NOT "blanks"—you write them fully):
-A) missingness_table(df)
-    - Return a DataFrame with columns:
-        ["column", "missing_rate", "missing_count"]
-    - Sorted by missing_rate descending
-
-B) multiple_linear_regression(df, outcome, predictors=None)
-    - Fit a multiple linear regression model.
-    - outcome: name of outcome column (must be numeric)
-    - predictors: optional list of predictor column names.
-        If None, use ALL numeric columns except the outcome.
-    - Raise a ValueError if outcome is not numeric.
-    - Return a dictionary of JSON-safe results (no numpy/pandas scalars),
-        including at least:
-        {
-        "outcome": ...,
-        "predictors": [...],
-        "n_rows_used": ...,
-        "r_squared": ...,
-        "adj_r_squared": ...,
-        "coefficients": {predictor: coef, ...},
-        "intercept": ...,
-        }
-
-HOW TO RUN (example): You can copy and paste this command (all one line) in your terminal after
+HOW TO RUN (example): You can copy and paste this command (all one line) in your **terminal** after
 replacing Target_Column, Outcome_Column, Predictor1, Predictor2 with actual column names from your dataset:
+
+NOTE: This only works if you have cloned the repository exactly as is.
+If not, you will have to adjust the path to the python code and data file to match your folder structure.
 
 python builds/Build0_data_analysis_pipeline_assignment_1.py --data data/penguins.csv --target Target_Column --outcome Outcome_Column --predictors Predictor1,Predictor2 --report_dir reports/
 
-
-Outputs will be written to:
-reports/
-data_profile.json
-summary_numeric.csv
-summary_categorical.csv
-missingness_by_column.csv
-correlations.csv (if available)
-regression_results.json (if you provide --outcome)
-figures/
-    missingness.png
-    corr_heatmap.png
-    hist_<col>.png
-    bar_<col>.png
+This will run the full pipeline and save outputs to the specified report directory.
 """
 
 from __future__ import annotations
@@ -61,9 +27,10 @@ import json
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
-import numpy as np
+# import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import statsmodels.formula.api as smf
 
 # -----------------------------
 # Utilities
@@ -72,27 +39,22 @@ import matplotlib.pyplot as plt
 
 def ensure_dirs(reports: Path) -> None:
     """Create output folders."""
-    # BLANK 1: create the figures folder
-    # HINT: (reports / "figures").mkdir(...)
-    ___BLANK_1___
+    # BLANK 1
+    (reports / "figures").mkdir(parents=True, exist_ok=True)
 
 
 def read_data(path: Path) -> pd.DataFrame:
     """Read a CSV file into a DataFrame with basic error handling."""
-    # BLANK 2: raise FileNotFoundError if path does not exist
-    ___BLANK_2___
+    # BLANK 2
+    if not path.exists():
+        raise FileNotFoundError(f"CSV not found: {path}")
 
-    # BLANK 3: read the CSV into df
-    ___BLANK_3___
+    # BLANK 3
+    df = pd.read_csv(path)
 
     if df.empty:
         raise ValueError("Loaded dataframe is empty.")
     return df
-
-
-# -----------------------------
-# Data profiling
-# -----------------------------
 
 
 def basic_profile(df: pd.DataFrame) -> dict:
@@ -100,8 +62,8 @@ def basic_profile(df: pd.DataFrame) -> dict:
     return {
         "n_rows": int(df.shape[0]),
         "n_cols": int(df.shape[1]),
-        # BLANK 4: list of column names
-        "columns": ___BLANK_4___,
+        # BLANK 4
+        "columns": df.columns.tolist(),
         "dtypes": {c: str(df[c].dtype) for c in df.columns},
         "n_missing_total": int(df.isna().sum().sum()),
         "missing_by_col": df.isna().sum().to_dict(),
@@ -110,12 +72,11 @@ def basic_profile(df: pd.DataFrame) -> dict:
 
 
 def split_columns(df: pd.DataFrame) -> Tuple[List[str], List[str]]:
-    """Identify and split numeric vs categorical columns into numeric and categorical lists."""
-    # BLANK 5: list numeric column names
-    # HINT: df.select_dtypes(include=["number"]).columns.______
-    numeric_cols = ___BLANK_5___
+    """Identify and split numeric vs categorical columns."""
+    # BLANK 5
+    numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
 
-    # Treat everything else as categorical
+    # Treat everything else as categorical (for Build0 simplicity)
     cat_cols = [c for c in df.columns if c not in numeric_cols]
     return numeric_cols, cat_cols
 
@@ -142,9 +103,8 @@ def summarize_numeric(df: pd.DataFrame, numeric_cols: List[str]) -> pd.DataFrame
             ]
         )
 
-    # BLANK 6: Create a transposed describe table with percentiles 0.25, 0.5, 0.75
-    # HINT: df[numeric_cols].describe(...).T
-    summary = ___BLANK_6___
+    # BLANK 6
+    summary = df[numeric_cols].describe(percentiles=[0.25, 0.5, 0.75]).T
 
     summary = summary.rename(columns={"50%": "median", "25%": "p25", "75%": "p75"})
     summary.insert(0, "column", summary.index)
@@ -163,8 +123,8 @@ def summarize_categorical(
         n_missing = int(series.isna().sum())
         n_unique = int(series.nunique(dropna=True))
 
-        # BLANK 7: top_k value counts (drop missing)
-        top = ___BLANK_7___
+        # BLANK 7
+        top = series.value_counts(dropna=True).head(top_k)
 
         rows.append(
             {
@@ -179,66 +139,136 @@ def summarize_categorical(
 
 
 # -----------------------------
-# REQUIRED: Student-built functions
+# Missingness
 # -----------------------------
 
 
 def missingness_table(df: pd.DataFrame) -> pd.DataFrame:
     """
-    TODO (Student task): Create a missingness table.
+    Create a missingness table.
 
-    Requirements:
-    - Compute missing_rate for each column (fraction missing)
-    - Compute missing_count for each column
-    - Return a DataFrame with columns:
-        column, missing_rate, missing_count
-    - Sort by missing_rate descending
-
-    Hints:
-    - df.isna().mean() gives missing rates
-    - df.isna().sum() gives missing counts
+    Returns a DataFrame with columns:
+    column, missing_rate, missing_count
+    sorted by missing_rate descending.
     """
-    raise NotImplementedError("Student must implement missingness_table(df).")
+    missing_rate = df.isna().mean()
+    missing_count = df.isna().sum()
+
+    out = pd.DataFrame(
+        {
+            "column": missing_rate.index.astype(str),
+            "missing_rate": missing_rate.values.astype(float),
+            "missing_count": missing_count.values.astype(int),
+        }
+    ).sort_values("missing_rate", ascending=False, ignore_index=True)
+
+    return out
+
+
+def _is_numeric_series(s: pd.Series) -> bool:
+    """Helper: check numeric dtype."""
+    return pd.api.types.is_numeric_dtype(s)
 
 
 def multiple_linear_regression(
     df: pd.DataFrame, outcome: str, predictors: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
-    TODO (Student task): Fit a multiple linear regression model.
+    Fit multiple linear regression using statsmodels OLS (formula interface).
 
-    Requirements:
-    - Outcome must be numeric; raise ValueError otherwise
-    - If predictors is None:
-        use ALL numeric columns except outcome
-    - Drop rows with missing values in outcome or predictors before fitting
-    - Fit the model using least squares:
-        y = intercept + b1*x1 + b2*x2 + ...
-    - Return a JSON-safe dictionary containing:
-        outcome, predictors, n_rows_used, r_squared, adj_r_squared,
-        intercept, coefficients (dict)
-
-    Hints: use statsmodels package:
-    import statsmodels.api as sm
-    X = df[predictors]
-    X = sm.add_constant(X)
-    y = df[outcome]
-    model = sm.OLS(y, X).fit()
-
-    IMPORTANT:
-    - Convert any numpy/pandas scalars to Python floats/ints before returning.
+    - outcome must be numeric
+    - predictors optional:
+        if None -> all numeric columns except outcome
+        if provided -> uses numeric predictors as-is and wraps non-numeric predictors in C(...)
+    - Missing data: statsmodels will drop rows with any missing values in outcome/predictors
+        (listwise deletion), matching typical OLS behavior.
     """
-    raise NotImplementedError(
-        "Student must implement multiple_linear_regression(df, outcome, predictors=None)."
-    )
+
+    # -------------------------
+    # 1) Validate inputs
+    # -------------------------
+    if outcome not in df.columns:
+        raise ValueError(f"Outcome column '{outcome}' not found in DataFrame.")
+
+    if not _is_numeric_series(df[outcome]):
+        raise ValueError(
+            f"Outcome column '{outcome}' must be numeric for OLS regression."
+        )
+
+    if predictors is None:
+        # Default: all numeric columns except the outcome
+        predictors = [
+            c
+            for c in df.select_dtypes(include=["number"]).columns.tolist()
+            if c != outcome
+        ]
+
+    if len(predictors) == 0:
+        raise ValueError("No predictors provided.")
+
+    for p in predictors:
+        if p not in df.columns:
+            raise ValueError(f"Predictor column '{p}' not found in DataFrame.")
+        if p == outcome:
+            raise ValueError("Outcome cannot be included as a predictor.")
+
+    # -------------------------
+    # 2) Build formula
+    # -------------------------
+    terms: List[str] = []
+    for p in predictors:
+        if _is_numeric_series(df[p]):
+            terms.append(p)
+        else:
+            # Treat strings/categories as categorical predictors
+            terms.append(f"C({p})")
+
+    formula = f"{outcome} ~ " + " + ".join(terms)
+
+    # -------------------------
+    # 3) Fit model
+    # -------------------------
+    model = smf.ols(formula=formula, data=df).fit()
+
+    # -------------------------
+    # 4) Package results (JSON-safe)
+    # -------------------------
+    params = {k: float(v) for k, v in model.params.items()}
+    pvals = {k: float(v) for k, v in model.pvalues.items()}
+    bse = {k: float(v) for k, v in model.bse.items()}
+
+    ci = model.conf_int()
+    conf_int = {idx: [float(ci.loc[idx, 0]), float(ci.loc[idx, 1])] for idx in ci.index}
+
+    results: Dict[str, Any] = {
+        "method": "statsmodels_ols",
+        "formula": formula,
+        "outcome": outcome,
+        "predictors": predictors,
+        "n_obs": int(model.nobs),
+        "df_model": float(model.df_model),
+        "df_resid": float(model.df_resid),
+        "r2": float(model.rsquared),
+        "adj_r2": float(model.rsquared_adj),
+        "aic": float(model.aic),
+        "bic": float(model.bic),
+        "f_stat": float(model.fvalue) if model.fvalue is not None else None,
+        "f_pvalue": float(model.f_pvalue) if model.f_pvalue is not None else None,
+        "coefficients": params,
+        "p_values": pvals,
+        "std_err": bse,
+        "conf_int_95": conf_int,
+    }
+
+    return results
 
 
 def correlations(df: pd.DataFrame, numeric_cols: List[str]) -> pd.DataFrame:
     """Compute correlations for numeric columns."""
     if len(numeric_cols) < 2:
         return pd.DataFrame()
-    # BLANK 8: compute correlation matrix for numeric columns
-    corr = ___BLANK_8___
+    # BLANK 8
+    corr = df[numeric_cols].corr()
     return corr
 
 
@@ -251,8 +281,8 @@ def plot_missingness(miss_df: pd.DataFrame, out_path: Path, top_n: int = 30) -> 
     """Plot missing data in a horizontal bar chart."""
     plot_df = miss_df.head(top_n).iloc[::-1]
     plt.figure()
-    # BLANK 9: create a horizontal bar chart using column names and missing_rate
-    ___BLANK_9___
+    # BLANK 9
+    plt.barh(plot_df["column"], plot_df["missing_rate"])
     plt.xlabel("Missing rate")
     plt.title(f"Top {min(top_n, len(miss_df))} columns by missingness")
     plt.tight_layout()
@@ -293,23 +323,68 @@ def plot_histograms(
         plt.close()
 
 
+from pathlib import Path
+from typing import List, Optional
+
+
+from pathlib import Path
+from typing import List, Optional
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
 def plot_bar_charts(
     df: pd.DataFrame,
-    cat_cols: List[str],
-    fig_dir: Path,
+    # Router/LLM-friendly args
+    x: Optional[str] = None,  # categorical column (preferred)
+    y: Optional[str] = None,  # ignored for bar charts (kept to avoid tool-call crashes)
+    # Back-compat args
+    cat_cols: Optional[List[str]] = None,
+    column: Optional[str] = None,
+    # Output control
+    fig_dir: Optional[Path] = None,
     max_cols: int = 12,
     top_k: int = 20,
 ) -> None:
-    """Plot bar charts for categorical columns."""
+    """Save bar charts for categorical columns (top_k categories).
+
+    Accepts any ONE of:
+      - x="species"            (router style)
+      - column="species"       (older style)
+      - cat_cols=["species","island"]
+
+    'y' is accepted for compatibility with (x, y) tool suggestions, but is not used.
+    """
+
+    # ---- Resolve output directory ----
+    if fig_dir is None:
+        fig_dir = Path("figures")
+    else:
+        fig_dir = Path(fig_dir)
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- Normalize column arguments ----
+    provided = [arg is not None for arg in (cat_cols, column, x)]
+    if sum(provided) > 1:
+        raise ValueError("Provide only one of: 'cat_cols', 'column', or 'x'.")
+
+    if cat_cols is None:
+        if column is not None:
+            cat_cols = [column]
+        elif x is not None:
+            cat_cols = [x]
+        else:
+            raise ValueError("Provide one of: 'cat_cols', 'column', or 'x'.")
+
+    # ---- Plot ----
     for c in cat_cols[:max_cols]:
-        series = df[c].astype("string").dropna()
-        if series.empty:
-            continue
-        vc = series.value_counts().head(top_k)
+        if c not in df.columns:
+            raise ValueError(f"Column not found: '{c}'")
+
         plt.figure()
-        plt.bar(vc.index.astype(str), vc.values)
-        plt.title(f"Top {min(top_k, len(vc))} values: {c}")
-        plt.xticks(rotation=90, fontsize=7)
+        counts = df[c].astype("string").value_counts(dropna=True).head(top_k)
+        counts.plot(kind="bar")
+        plt.title(f"Top {min(top_k, len(counts))} values: {c}")
         plt.tight_layout()
         plt.savefig(fig_dir / f"bar_{c}.png", dpi=200)
         plt.close()
@@ -360,9 +435,9 @@ def target_check(df: pd.DataFrame, target: str) -> Optional[dict]:
     return results
 
 
-# -----------------------------
+# ----------------
 # Main pipeline
-# -----------------------------
+# ----------------
 
 
 def main():
@@ -480,8 +555,7 @@ def main():
         # into a clean Python list
         if args.predictors:
             # BLANK 10: parse comma-separated predictors into a list of cleaned names
-            # HINT: [p.strip() for p in args.predictors.split(",") if p.strip()]
-            preds = ___BLANK_10___
+            preds = [p.strip() for p in args.predictors.split(",") if p.strip()]
 
         # Run the regression
         reg_results = multiple_linear_regression(
