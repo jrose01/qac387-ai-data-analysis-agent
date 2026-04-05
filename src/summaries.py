@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple, cast
 import pandas as pd
 from math import atanh, tanh, sqrt
+from regex import sub
 from scipy import stats
+
+
+# output formatting helper
+from src.utils.tool_result_utils import make_tool_result, ToolResult
 
 
 def summarize_numeric(
@@ -112,7 +117,7 @@ def pearson_correlation(
     y: str,
     ci_level: float = 0.95,
     min_n_recommendation: int = 30,
-) -> Dict[str, Any]:
+) -> ToolResult:
     """
     Compute Pearson correlation statistics between two numeric variables.
 
@@ -128,19 +133,21 @@ def pearson_correlation(
         raise ValueError(f"Column not found: {y}")
 
     # Pairwise complete cases
-    sub = df[[x, y]].copy()
-    sub[x] = pd.to_numeric(sub[x], errors="coerce")
-    sub[y] = pd.to_numeric(sub[y], errors="coerce")
-    sub = sub.dropna()
-    n = int(len(sub))
+    pair_df = df[[x, y]].copy()
+    pair_df[x] = pd.to_numeric(pair_df[x], errors="coerce")
+    pair_df[y] = pd.to_numeric(pair_df[y], errors="coerce")
+    pair_df = pair_df.dropna()
+    n = int(len(pair_df))
 
     if n < 10:
         raise ValueError(
             "Need at least 10 complete observations to compute CI and p-value."
         )
 
-    # Exact Pearson r + p-value
-    r, p_value = stats.pearsonr(sub[x].to_numpy(), sub[y].to_numpy())
+    r, p_value = cast(
+        Tuple[float, float],
+        stats.pearsonr(pair_df[x].to_numpy(), pair_df[y].to_numpy()),
+    )
     r = float(r)
     p_value = float(p_value)
     r2 = r * r
@@ -176,10 +183,11 @@ def pearson_correlation(
         f"{methods_note}"
     )
 
-    return {
-        "text": text,
-        "artifact_paths": [],
-        "result": {
+    return make_tool_result(
+        name="pearson_correlation",
+        text=text,
+        artifact_paths=[],
+        structured={
             "x": x,
             "y": y,
             "n": n,
@@ -191,4 +199,4 @@ def pearson_correlation(
             "p_value": p_value,
             "min_n_recommendation": min_n_recommendation,
         },
-    }
+    )

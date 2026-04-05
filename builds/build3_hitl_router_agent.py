@@ -16,10 +16,12 @@ Keeps power-user commands:
 
 You will need the expected Build0 tool registry (tools.py in the updated src folder)
 
-Each tool function should accept (df, report_dir, **kwargs) and return either:
-- a string, OR
-- a dict with a "text" field (+ optional "artifact_paths"), OR
-- a tuple (text, artifact_paths)
+Each tool function should accept (df, report_dir, **kwargs) and ideally return ToolResult.
+
+The runtime is backward compatible and will also normalize:
+- a string
+- a dict with "text" and optional "artifact_paths"
+- a tuple of (text, artifact_paths)
 
 To run this script, you will need to make sure you have the most updated src and requirements.txt file
 from the course repository.
@@ -43,17 +45,25 @@ To interact with the agent, use the following commands:
 from __future__ import annotations
 
 import argparse
+
+# from ast import If
+# import code
 import importlib
 import inspect
 import json
+
+# from os import read
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+
+# from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 from textwrap import dedent
+# from wsgiref import validate
 
+# from matplotlib.pylab import save
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -64,9 +74,20 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
+# Add project root to Python path for findingbuilds folder and importing src modules;
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+# import the ToolResult dataclass and normalize_tool_return function
+# for consistent tool output formatting
+from src.utils.tool_result_utils import ToolResult, normalize_tool_return
+
 # always set the location of the .env file to the project root for consistent env var loading
-PROJECT_ROOT = Path(__file__).resolve().parents[1]  # project root (parent of /builds)
-load_dotenv(PROJECT_ROOT / ".env")
+# PROJECT_ROOT = (
+#    Path(__file__).resolve().parents[1]
+# )
+# load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(".env")
+
 
 # --------------------------------------------------------------------------------------
 # Langfuse instrumentation
@@ -158,8 +179,8 @@ def inject_artifact_paths(
     file_param_candidates = ["out_path", "output_path", "save_path"]
     for p in file_param_candidates:
         if p in params and p not in args:
-            # Choose an extension that won’t break most tools; many plotting funcs accept .png
-            # and table funcs often accept .csv/.json. If tool needs a specific ext, it should
+            # Choose an extension that won’t break most tools; many plotting functions accept .png
+            # and table functions often accept .csv/.json. If tool needs a specific extension, it should
             # set its own default or the router can pass it explicitly.
             default_path = tool_output_dir / f"{tool_name}_output"
             args[p] = default_path
@@ -238,34 +259,42 @@ def parse_json_object(raw: str) -> Dict[str, Any]:
     """
     Parse a JSON object from:
       - raw JSON text
-      - or a fenced ```json block
+      - a fenced ```json block
+      - or a near-JSON object that uses doubled braces like {{ ... }}
+
     Returns {} on failure.
     """
     raw = (raw or "").strip()
-    try:
-        obj = json.loads(raw)
-        return obj if isinstance(obj, dict) else {}
-    except json.JSONDecodeError:
-        pass
 
+    candidates = [raw]
+
+    # If the model copied doubled braces from prompt examples, normalize them.
+    if "{{" in raw or "}}" in raw:
+        candidates.append(raw.replace("{{", "{").replace("}}", "}"))
+
+    # If wrapped in a fenced json block, try that too.
     match = JSON_BLOCK_RE.search(raw)
     if match:
-        try:
-            obj = json.loads(match.group(1))
-            return obj if isinstance(obj, dict) else {}
-        except json.JSONDecodeError:
-            pass
+        block = match.group(1).strip()
+        candidates.append(block)
+        if "{{" in block or "}}" in block:
+            candidates.append(block.replace("{{", "{").replace("}}", "}"))
 
-    # Fallback: parse between the first '{' and last '}'.
-    # This helps with model outputs that include extra pre/post text.
+    # Fallback: try substring from first { to last }
     i = raw.find("{")
     j = raw.rfind("}")
     if i != -1 and j != -1 and j > i:
+        sub = raw[i : j + 1].strip()
+        candidates.append(sub)
+        if "{{" in sub or "}}" in sub:
+            candidates.append(sub.replace("{{", "{").replace("}}", "}"))
+
+    for text in candidates:
         try:
-            obj = json.loads(raw[i : j + 1])
+            obj = json.loads(text)
             return obj if isinstance(obj, dict) else {}
         except json.JSONDecodeError:
-            return {}
+            continue
 
     return {}
 
@@ -379,15 +408,18 @@ def load_tools() -> Dict[str, ToolFn]:
             continue
 
     raise RuntimeError(
-        "Could not import a TOOLS registry.\n\n"
-        "Create src/tools.py with something like:\n\n"
-        "  from src.some_build0_module import describe_numeric, freq_table, simple_ols\n"
-        "  TOOLS = {\n"
-        "      'describe_numeric': describe_numeric,\n"
-        "      'freq_table': freq_table,\n"
-        "      'simple_ols': simple_ols,\n"
-        "  }\n\n"
-        "Then rerun this script."
+        dedent("""
+        Could not import a TOOLS registry.
+        Create src/tools.py with something like:
+        from src.some_build0_module import describe_numeric, freq_table, simple_ols
+        TOOLS = {
+        'describe_numeric': describe_numeric,
+        'freq_table': freq_table,
+        'simple_ols': simple_ols,
+        }
+        Then rerun this script.
+        
+        """)
     )
 
 
@@ -460,50 +492,6 @@ def format_tool_arg_hints(tools: Dict[str, ToolFn], allowed_tools: list[str]) ->
     return "\n".join(lines)
 
 
-@dataclass
-class ToolResult:
-    name: str
-    artifact_paths: list[str]
-    text: str
-
-
-def normalize_tool_return(tool_name: str, result: Any) -> ToolResult:
-    """
-    Normalize tool returns into ToolResult.
-
-    Accepted return types:
-      - str
-      - dict with 'text' and optional 'artifact_paths'
-      - tuple(text, artifact_paths)
-    """
-    if isinstance(result, ToolResult):
-        return result
-
-    if isinstance(result, str):
-        return ToolResult(name=tool_name, artifact_paths=[], text=result)
-
-    if isinstance(result, dict):
-        text = str(result.get("text", ""))
-        artifact_paths = result.get("artifact_paths", []) or []
-        if not isinstance(artifact_paths, list):
-            artifact_paths = [str(artifact_paths)]
-        return ToolResult(
-            name=tool_name, artifact_paths=[str(p) for p in artifact_paths], text=text
-        )
-
-    if isinstance(result, tuple) and len(result) == 2:
-        text, artifacts = result
-        if artifacts is None:
-            artifacts = []
-        if not isinstance(artifacts, list):
-            artifacts = [artifacts]
-        return ToolResult(
-            name=tool_name, artifact_paths=[str(p) for p in artifacts], text=str(text)
-        )
-
-    return ToolResult(name=tool_name, artifact_paths=[], text=str(result))
-
-
 # --------------------------------------------------------------------------------------
 # Chains
 # --------------------------------------------------------------------------------------
@@ -511,19 +499,19 @@ def build_suggest_chain(
     model: str, temperature: float = 0.2, stream: bool = False, memory: bool = False
 ):
     llm = ChatOpenAI(model=model, temperature=temperature, streaming=stream)
-    system_text = (
-        "You are a data analysis assistant.\n"
-        "You ONLY see the dataset schema (columns + dtypes). Do NOT invent columns.\n\n"
-        "Return:\n"
-        "1) 2-3 plausible research questions (bulleted)\n"
-        "2) For each: outcome(s), predictor(s), and suggested analysis type\n"
-        "3) 5-7 clarifying questions\n"
-    )
+    suggest_system_text = """
+        You are a data analysis assistant.
+        You ONLY see the dataset schema (columns + dtypes). Do NOT invent columns.
+        Return:
+        1) 2-3 plausible research questions that can be tested based on the dataset (bulleted)
+        2) For each: outcome(s), predictor(s), and suggested analysis type
+        3) 5-7 clarifying questions
+        """
 
     if memory:
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", system_text),
+                SystemMessage(content=suggest_system_text),
                 ("human", "Dataset schema:\n{schema_text}"),
                 MessagesPlaceholder(variable_name="history"),
                 ("human", "User question:\n{user_query}"),
@@ -532,7 +520,7 @@ def build_suggest_chain(
     else:
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", system_text),
+                SystemMessage(content=suggest_system_text),
                 (
                     "human",
                     "Dataset schema:\n{schema_text}\n\nUser question:\n{user_query}\n",
@@ -557,33 +545,38 @@ def build_codegen_chain(
     model: str, temperature: float = 0.2, stream: bool = False, memory: bool = False
 ):
     llm = ChatOpenAI(model=model, temperature=temperature, streaming=stream)
-    system_text = (
-        "You are a careful Python data analysis code generator.\n"
-        "IMPORTANT RULES:\n"
-        "- You ONLY know the dataset schema. Do NOT invent columns.\n"
-        "- Produce ONE Python script that can run as a standalone file.\n"
-        "- The script MUST:\n"
-        "  (1) use argparse with --data and --report_dir\n"
-        "  (2) read the CSV at --data with pandas\n"
-        "  (3) handle missing values explicitly\n"
-        "  (4) If missing data are present, use listwise deletion unless specified otherwise\n"
-        "  (4) save at least ONE artifact into --report_dir\n"
-        "  (5) validate referenced columns exist (exit nonzero if not)\n\n"
-        "OUTPUT FORMAT (exactly):\n"
-        "PLAN:\n"
-        "- ...\n\n"
-        "CODE:\n"
-        "```python\n"
-        "# full script\n"
-        "```\n\n"
-        "VERIFY:\n"
-        "- ...\n"
-    )
+    codegen_system_text = """
+    You are a careful Python data analysis code generator.
+
+    IMPORTANT RULES:
+    - You ONLY know the dataset schema. Do NOT invent columns.
+    - Produce ONE Python script that can run as a standalone file.
+    - The script MUST:
+      (1) use argparse with --data and --report_dir
+      (2) read the CSV at --data with pandas
+      (3) handle missing values explicitly
+      (4) If missing data are present, use listwise deletion unless specified otherwise.
+      (5) save at least ONE artifact into --report_dir
+      (6) validate referenced columns exist (exit nonzero if not)
+
+    OUTPUT FORMAT (exactly):
+
+    PLAN:
+    - ...brief plan for the analysis and what the code will do...
+
+    CODE:
+    ```python
+    # full script
+    ```
+
+    VERIFY:
+    - ...brief verification checklist to ensure code correctness and validity...
+    """
 
     if memory:
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", system_text),
+                SystemMessage(content=codegen_system_text),
                 ("human", "Dataset schema:\n{schema_text}"),
                 MessagesPlaceholder(variable_name="history"),
                 ("human", "User request:\n{user_request}"),
@@ -592,7 +585,7 @@ def build_codegen_chain(
     else:
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", system_text),
+                SystemMessage(content=codegen_system_text),
                 (
                     "human",
                     "Dataset schema:\n{schema_text}\n\nUser request:\n{user_request}\n",
@@ -601,6 +594,7 @@ def build_codegen_chain(
         )
 
     base_chain = prompt | llm | StrOutputParser()
+
     if not memory:
         return base_chain
 
@@ -623,50 +617,53 @@ def build_toolplan_chain(
 ):
     """Pick one tool + args ONLY (JSON)."""
     llm = ChatOpenAI(model=model, temperature=temperature, streaming=stream)
-    # allow_str = format_capability_hints(allowed_tools, tool_descriptions)
 
-    system_text = dedent("""
-    You are a routing assistant. You pick the single BEST tool to satisfy 
-    a user request from an allow-list of tools.
-    
-    You see:
-    - Dataset schema (columns + dtypes)
-    - Allow-list tools + tool signatures
-    - User request
+    allow_str = format_capability_hints(allowed_tools, tool_descriptions)
 
-    Allow-list tools:
-    {allow_str}
-
-    Tool argument names by signature:
-    {tool_arg_hints}
-
+    build_toolplan_system_text = dedent("""
     Return ONLY valid JSON in exactly ONE of these forms.
-    
     If you choose a tool:
-    ```json
-        {{
-        "tool": "<one of the allow-list tool names>",\n'
-        "args": {{ ... }},\n'
-        "note": "one sentence explaining why this tool fits"\n'
-        }}
-    ```
+    {"mode":"tool","tool":"plot_histograms","args":{"numeric_cols":["bill_length_mm","flipper_length_mm"]},"note":"<brief>"}
+
+    If no tool can satisfy the request:
+    {"mode":"codegen","code_request":"<brief concrete coding request>","note":"<brief>"}
+    
     Rules:
-        - Use ONLY columns in the schema.
-        - args keys MUST use valid parameter names for the selected tool signature above.
-        - Do NOT use generic keys like 'column' unless that exact parameter exists.
-        - If there is no tool to complete the request, fall back to codegen mode.
-        - IMPORTANT: If the selected tool requires an input column, args MUST include it.
-        - Never output an empty args object for summarize_categorical.
-        - For summarize_categorical:
-        - If the user requests one column, use args {{"column": "<col>"}}
-        - If the user requests multiple columns, use args {{"cat_cols": ["<col1>", "<col2>"]}}
-        - Filesystem paths, report directories, and session folders are handled by the runtime.
-        
-        """)
+    - Use ONLY columns in the schema.
+    - args keys MUST use valid parameter names for the selected tool signature above.
+    - Do NOT use generic keys like "column" unless that exact parameter exists.
+    - If there is no tool to complete the request, fall back to codegen mode.
+    - IMPORTANT: If the selected tool requires an input column, args MUST include it.
+    - Never output an empty args object for summarize_categorical.
+
+    - For summarize_categorical:
+    - If the user requests one column, use args={"column":"<col>"}
+    - If the user requests multiple columns, use args={"cat_cols":["<col1>","<col2>"]}
+    - Filesystem paths, report directories, and session folders are handled by the runtime.
+    
+    Examples:
+    User: "frequency table for sex"
+    {"mode":"tool","tool":"summarize_categorical","args":{"column":"sex"},"note":"Frequency table is a categorical summary."}
+    
+    User: "frequency tables for sex and island"
+    {"mode":"tool","tool":"summarize_categorical","args":{"cat_cols":["sex","island"]},"note":"Summarize multiple categorical columns."}
+    
+    User: "show missingness"
+    {"mode":"tool","tool":"missingness_table","args":{},"note":"Missingness summary is available as a tool."}
+    
+    User: "histograms for bill_length_mm and flipper_length_mm"
+    {"mode":"tool","tool":"plot_histograms","args":{"numeric_cols":["bill_length_mm","flipper_length_mm"]},"note":"Histogram tool visualizes numeric distributions."}
+
+    FINAL OUTPUT REQUIREMENTS:
+    - Output MUST be valid JSON.
+    - Do NOT include markdown, backticks, or explanations.
+    - Do NOT include any text before or after the JSON.
+    - The response must be parseable by json.loads().
+    """)
 
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", system_text),
+            SystemMessage(content=build_toolplan_system_text),
             (
                 "human",
                 "Dataset schema:\n{schema_text}\n\nUser request:\n{user_request}\n",
@@ -685,106 +682,76 @@ def build_router_chain(
     stream: bool = False,
 ):
     llm = ChatOpenAI(model=model, temperature=temperature, streaming=stream)
-    # allow_str = format_capability_hints(allowed_tools, tool_descriptions)
+    allow_str = format_capability_hints(allowed_tools, tool_descriptions)
 
-    system_text = dedent("""
+    router_system_text = dedent("""
     You are a TOOL ROUTER for a data analysis CLI.
-
     You see:
     - Dataset schema (columns + dtypes)
     - Allow-list tools + tool signatures
     - User request
-
     Allow-list tools:
-    {allow_str}
+    """)
 
+    router_system_text += allow_str + "\n\n"
+
+    router_system_text += dedent("""
     Tool argument names by signature:
-    {tool_arg_hints}
+    """)
+    router_system_text += tool_arg_hints + "\n\n"
 
-    Routing checklist (do this before producing JSON):
-    1) Does a tool in the allow-list clearly satisfy the request?
-       - If YES → mode="tool"
-       - If NO  → mode="codegen"
-    2) If mode="tool":
-       - pick the exact tool name from the allow-list
-       - extract referenced column names and verify they exist in the schema
-    3) Construct args:
-       - use parameter names from the tool signature hints
-       - include required parameters
-       - do NOT output an empty args object unless the tool truly takes no args
+    router_system_text += dedent("""
+    Your job:
+    1. Decide whether an allow-listed tool can directly satisfy the user request.
+    2. If yes, return a tool decision.
+    3. If no, return a codegen decision.
     
-    The router should only include analysis parameters in args.
-    Filesystem paths, report directories, and session folders are handled by the runtime.
+    Rules:
+    - Use only tool names from the allow-list.
+    - Use only parameter names from the tool signature hints.
+    - Include all required arguments.
+    - Do not invent column names; only use columns that exist in the schema.
+    - The router should include only analysis parameters in args.
+    - Do not include filesystem paths, report directories, or session folders.
+    - Do not include explanations, reasoning, prose, bullet points, or markdown fences.
+    - Do not show your checklist or intermediate reasoning.
+    - Return exactly one JSON object and nothing else.
     
-    Return ONLY valid JSON in exactly ONE of these forms.
-
-    If you choose a tool:
-    ```json
-    {{"mode":"tool","tool":"plot_histograms","args":{
-        "numeric_cols":["bill_length_mm","flipper_length_mm"]},"note":"<brief>"}}
-    ```
-
-    If no tool can satisfy the request:
-    ```json
-    {{"mode":"codegen","code_request":"<concrete coding request>","note":"<brief>"}}
-    ```
-
-    Tool selection guidance (use tool mode when possible):
-    - Dataset overview -> basic_profile
-    - Missing data -> missingness_table or plot_missingness
-    - Categorical summaries / frequency tables -> summarize_categorical
-    - Numeric summaries -> summarize_numeric
-    - Correlations -> pearson_correlation or plot_corr_heatmap
-    - Histograms -> plot_histograms
-    - Bar charts (categorical counts) -> plot_bar_charts
-    - Categorical vs numeric boxplot -> plot_cat_num_boxplot
-    - Linear regression -> multiple_linear_regression
-    - Validate outcome/target column -> target_check
-
-    Tool-specific argument rules:
-    - summarize_categorical requires either:
-      - one column: args={{"column":"<col>"}}
-      - many columns: args={{"cat_cols":["<col1>","<col2>"]}}
-
-    Examples:
-    User: "frequency table for sex"
-    ```json
-    {{"mode":"tool","tool":"summarize_categorical","args":{{"column":"sex"}},"note":"Frequency table is a categorical summary."}}
-    ```
-
-    User: "frequency tables for sex and island"
-    ```json
-    {{"mode":"tool","tool":"summarize_categorical","args":{{"cat_cols":["sex","island"]}},"note":"Summarize multiple categorical columns."}}
-    ```
-
-    User: "show missingness"
-    ```json
-    {{"mode":"tool","tool":"missingness_table","args":{{}},"note":"Missingness summary is available as a tool."}}
-    ```
+    Output schema:
     
-    User: "histograms for bill_length_mm and flipper_length_mm"
-    ```json
+    For tool use:
     {
-        "mode":"tool",
-    "tool":"plot_histograms",
-    "args":{
-            "numeric_cols":["bill_length_mm","flipper_length_mm"]
-    },
-    "note":"Histogram tool visualizes numeric distributions."
+        "mode": "tool",
+        "tool": "<exact_tool_name>",
+        "args": {
+            "<arg_name>": <value>
+            }
     }
-```
-""")
+    
+    For code generation:
+    {
+        "mode": "codegen",
+        "plan": "<brief plan>",
+        "codegen_instructions": "<what code should do>"
+    }
+    
+    Validation requirements:
+    - The top-level key "mode" is required.
+    - "mode" must be exactly "tool" or "codegen".
+    - If "mode" is "tool", include both "tool" and "args".- If "mode" is "codegen", include both "plan" and "codegen_instructions".
+    - Do not output any keys outside the selected schema unless necessary.
+    - Return only the JSON object.
+    """)
 
     prompt = ChatPromptTemplate.from_messages(
         [
-            SystemMessage(content=system_text),  # <-- NOT templated
+            SystemMessage(content=router_system_text),
             (
                 "human",
                 "Dataset schema:\n{schema_text}\n\nUser request:\n{user_request}\n",
             ),
         ]
     )
-
     return prompt | llm | StrOutputParser()
 
 
@@ -792,19 +759,20 @@ def build_results_summarizer_chain(
     model: str, temperature: float = 0.2, stream: bool = False
 ):
     llm = ChatOpenAI(model=model, temperature=temperature, streaming=stream)
-    system_text = (
-        "You are an expert at explaining data analysis results.\n"
-        "Given a user request and tool outputs, do:\n"
-        "1) What we ran (1-2 sentences)\n"
-        "2) Key results (bullets)\n"
-        "3) Interpretation (plain language)\n"
-        "4) Caveats/assumptions (bullets)\n"
-        "5) Next steps (2-3 suggestions)\n"
-        "Do NOT invent results; use only what is provided.\n"
-    )
+    results_summarizer_system_text = """
+        You are an expert at explaining data analysis results.
+        Given a user request and tool outputs, do:
+        1) What we ran (1-2 sentences)
+        2) Key results (bullets)
+        3) Interpretation (plain language)
+        4) Caveats/assumptions (bullets)
+        5) Next steps (2-3 suggestions)
+        Do NOT invent results; use only what is provided.
+        """
+
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", system_text),
+            SystemMessage(content=results_summarizer_system_text),
             ("human", "User request:\n{user_request}\n\nTool output:\n{tool_output}\n"),
         ]
     )
@@ -814,7 +782,7 @@ def build_results_summarizer_chain(
 # --------------------------------------------------------------------------------------
 # Execution (subprocess, not exec)
 # --------------------------------------------------------------------------------------
-@observe(name="execute-generated-script", as_type="span", capture_output=False)
+@observe(name="execute-generated-script", as_type="span", capture_output=True)
 def run_generated_script(
     script_path: Path, data_path: Path, report_dir: Path, timeout_s: int = 60
 ) -> subprocess.CompletedProcess:
@@ -1096,7 +1064,14 @@ def do_tool_run_from_plan(
         return
 
     out_txt = report_dir / "tool_outputs" / f"{tool_name}_output.txt"
+
     save_text(out_txt, res.text)
+    if res.artifact_paths:
+        print("Artifacts:")
+        for p in res.artifact_paths:
+            print(f"- {p}")
+            print()
+
     print(f"\nSaved tool output to: {out_txt}\n")
 
     summary = traced_summarize(summarize_chain, req, res.text, base_config, tags)
@@ -1206,18 +1181,45 @@ def do_router(
 ) -> None:
     """
     Router -> (tool-run OR codegen).
+
     If router selects tool mode but no matching tool exists in TOOLS,
     fall back to code generation.
+
+    This version is intentionally defensive:
+    - accepts the ideal schema with "mode"
+    - recovers if the LLM forgets "mode" but clearly returned a tool/codegen shape
+    - tolerates either "codegen_instructions" or older "code_request" naming
     """
     raw = traced_router(router_chain, schema_text, req, base_config, tags)
     plan = parse_json_object(raw)
+
     if not plan:
         print("\nERROR: Router did not return valid JSON. Try again.\n")
         print("Raw output was:\n", raw, "\n")
         return
 
-    mode = (plan.get("mode") or "").strip().lower()
-    note = plan.get("note", "")
+    if not isinstance(plan, dict):
+        print("\nERROR: Router returned JSON, but not a JSON object. Try again.\n")
+        print("Raw output was:\n", raw, "\n")
+        return
+
+    # ------------------------------------------------------------
+    # Recover missing mode when the router output shape is obvious
+    # ------------------------------------------------------------
+    mode = str(plan.get("mode") or "").strip().lower()
+
+    if not mode:
+        if "tool" in plan and "args" in plan:
+            mode = "tool"
+            plan["mode"] = "tool"
+        elif "plan" in plan and "codegen_instructions" in plan:
+            mode = "codegen"
+            plan["mode"] = "codegen"
+        elif "code_request" in plan:
+            mode = "codegen"
+            plan["mode"] = "codegen"
+
+    note = str(plan.get("note") or "").strip()
 
     print("\n=== ROUTER DECISION ===")
     print(json.dumps(plan, indent=2))
@@ -1225,8 +1227,23 @@ def do_router(
         print(f"\nNote: {note}")
     print()
 
+    # ------------------------------------------------------------
+    # TOOL MODE
+    # ------------------------------------------------------------
     if mode == "tool":
         router_tool = str(plan.get("tool") or "").strip()
+        router_args = plan.get("args", {})
+
+        if not router_tool:
+            print("\nERROR: Router chose tool mode but did not provide a tool name.\n")
+            print("Raw output was:\n", raw, "\n")
+            return
+
+        if not isinstance(router_args, dict):
+            print("\nERROR: Router chose tool mode but 'args' is not a JSON object.\n")
+            print("Raw output was:\n", raw, "\n")
+            return
+
         if router_tool not in tools:
             print(
                 "Router fallback: no matching tool is available in TOOLS. "
@@ -1259,11 +1276,13 @@ def do_router(
         )
         return
 
+    # ------------------------------------------------------------
+    # CODEGEN MODE
+    # ------------------------------------------------------------
     if mode == "codegen":
-        code_req = (plan.get("code_request") or "").strip()
-        if not code_req:
-            # fallback: just use the original request
-            code_req = req
+        code_req = plan.get("codegen_instructions") or plan.get("code_request") or req
+        code_req = str(code_req).strip()
+
         do_codegen(
             req=code_req,
             codegen_chain=codegen_chain,
@@ -1276,6 +1295,9 @@ def do_router(
         )
         return
 
+    # ------------------------------------------------------------
+    # INVALID MODE
+    # ------------------------------------------------------------
     print("\nERROR: Router 'mode' must be 'tool' or 'codegen'. Try again.\n")
     print("Raw output was:\n", raw, "\n")
 
