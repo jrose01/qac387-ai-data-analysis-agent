@@ -1,5 +1,9 @@
 # basic_profile
 
+## RULES
+
+Always check the tool registry to choose an appropriate tool first. If an appropriate tool exists, use that tool. Use code generation ONLY when an appropriate tool does not exist in th tool registry.
+
 ## Purpose
 Create a high-level overview of a dataset before deeper analysis.
 

@@ -1,5 +1,12 @@
 # Basic Data Analysis Workflow
 
+This is a general workflow. It is not meant to be information to assist in tool calling. Refer to the tool
+selection rules.md file and the files in th build0_tool_notes directory for assistance in choosing the appropriate tool.
+
+## RULES
+
+Always check the tool registry to choose an appropriate tool first. If an appropriate tool exists, use that tool. Use code generation ONLY when an appropriate tool does not exist in th tool registry.
+
 ## Step 1: inspect the dataset
 Start by profiling the data and identifying variable types.
 

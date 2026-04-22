@@ -1,10 +1,15 @@
 # Choosing Simple Models
 
+## RULES
+
+Always check the tool registry to choose an appropriate tool first. If an appropriate tool exists, use that tool. Use code generation ONLY when an appropriate tool does not exist in th tool registry.
+
 ## Descriptive analysis
-Choose summaries and plots when the goal is exploration rather than formal modeling.
+
+Choose summaries and plots from the tool registry when the goal is exploration rather than formal modeling.
 
 ## Multiple linear regression
-Choose this when:
+Choose this from the tool registry when:
 - the outcome is numeric
 - the relationship is approximately linear
 - predictors may be numeric or categorical
